@@ -1,0 +1,7 @@
+# Values for the CNTi Test Suite run (.github/workflows/cnti.yml): a CPU
+# limit next to the memory limit the chart already sets.
+deployment:
+  envoyGateway:
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: 1000m, memory: 1024Mi}
