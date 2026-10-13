@@ -1,45 +1,12 @@
 ---
 # A GatewayClass and a Gateway with one HTTP listener: enough for the
-# controller to create the proxy Deployment. The EnvoyProxy sets limits on
-# the proxy's two containers; the shutdown-manager has no resources field of
-# its own, so it gets them through the Deployment patch.
-apiVersion: gateway.envoyproxy.io/v1alpha1
-kind: EnvoyProxy
-metadata:
-  name: cnti
-  namespace: envoy-gateway-system
-spec:
-  provider:
-    type: Kubernetes
-    kubernetes:
-      envoyDeployment:
-        container:
-          resources:
-            requests: {cpu: 100m, memory: 256Mi}
-            limits: {cpu: 1000m, memory: 512Mi}
-        patch:
-          type: StrategicMerge
-          value:
-            spec:
-              template:
-                spec:
-                  containers:
-                    - name: shutdown-manager
-                      resources:
-                        requests: {cpu: 10m, memory: 32Mi}
-                        limits: {cpu: 100m, memory: 64Mi}
----
+# controller to create the proxy Deployment, with its default resources.
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: cnti
 spec:
   controllerName: gateway.envoyproxy.io/gatewayclass-controller
-  parametersRef:
-    group: gateway.envoyproxy.io
-    kind: EnvoyProxy
-    name: cnti
-    namespace: envoy-gateway-system
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway

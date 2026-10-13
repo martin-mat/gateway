@@ -1,6 +1,7 @@
 ---
-# CNTi Test Suite configuration for Envoy Gateway: the released chart, then a
-# GatewayClass and Gateway so the controller creates a proxy. The proxy
+# CNTi Test Suite configuration for Envoy Gateway with its defaults: the
+# released chart, then a GatewayClass and Gateway so the controller creates a
+# proxy. The proxy
 # Deployment is found by the label the controller puts on it; the suite waits
 # for labelled workloads to appear, which an ownership lookup does not.
 config_version: "v2"
@@ -13,17 +14,16 @@ common:
     # Retained release tags used by the rolling update, downgrade and
     # rollback tests; the chart version is the tag under test.
     - name: envoy-gateway
-      rolling_update_test_tag: "v1.9.0"
-      rolling_downgrade_test_tag: "v1.8.4"
-      rolling_version_change_test_tag: "v1.9.0"
-      rollback_from_tag: "v1.9.0"
+      rolling_update_test_tag: "v1.9.1"
+      rolling_downgrade_test_tag: "v1.8.5"
+      rolling_version_change_test_tag: "v1.9.1"
+      rollback_from_tag: "v1.9.1"
 deployments:
   helm_charts:
     - name: envoy-gateway
       registry_url: oci://docker.io/envoyproxy/gateway-helm
-      chart_version: v1.9.1
+      chart_version: v1.9.2
       namespace: envoy-gateway-system
-      helm_values: --values ci/cnti-values.yaml
       priority: 1
   manifests:
     - name: gateway
