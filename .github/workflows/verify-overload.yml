@@ -1,0 +1,100 @@
+name: Verify proxy overload manager
+on:
+  push:
+    branches: [verify-overload]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: helm/kind-action@v1
+      - name: Install Envoy Gateway v1.9.2 with its defaults
+        run: |
+          helm install eg oci://docker.io/envoyproxy/gateway-helm --version v1.9.2 -n envoy-gateway-system --create-namespace --wait --timeout 10m
+          kubectl wait --timeout=5m -n envoy-gateway-system deployment/envoy-gateway --for=condition=Available
+      - name: A Gateway with the default proxy, and one whose EnvoyProxy sets a 1Gi memory limit
+        run: |
+          kubectl apply -f - <<'YAML'
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: GatewayClass
+          metadata: {name: default}
+          spec: {controllerName: gateway.envoyproxy.io/gatewayclass-controller}
+          ---
+          apiVersion: gateway.envoyproxy.io/v1alpha1
+          kind: EnvoyProxy
+          metadata: {name: limited, namespace: envoy-gateway-system}
+          spec:
+            provider:
+              type: Kubernetes
+              kubernetes:
+                envoyDeployment:
+                  container:
+                    resources:
+                      requests: {cpu: 100m, memory: 512Mi}
+                      limits: {memory: 1Gi}
+          ---
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: GatewayClass
+          metadata: {name: limited}
+          spec:
+            controllerName: gateway.envoyproxy.io/gatewayclass-controller
+            parametersRef: {group: gateway.envoyproxy.io, kind: EnvoyProxy, name: limited, namespace: envoy-gateway-system}
+          ---
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata: {name: default, namespace: envoy-gateway-system}
+          spec:
+            gatewayClassName: default
+            listeners: [{name: http, protocol: HTTP, port: 80}]
+          ---
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata: {name: limited, namespace: envoy-gateway-system}
+          spec:
+            gatewayClassName: limited
+            listeners: [{name: http, protocol: HTTP, port: 80}]
+          YAML
+          for g in default limited; do
+            for i in $(seq 1 60); do
+              n=$(kubectl get deploy -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=$g -o name | head -1)
+              [ -n "$n" ] && break; sleep 5
+            done
+            kubectl rollout status -n envoy-gateway-system "$n" --timeout=5m
+          done
+      - name: Compare the proxies' resources and overload manager
+        run: |
+          for g in default limited; do
+            n=$(kubectl get deploy -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=$g -o name | head -1)
+            echo "===== Gateway $g ($n)"
+            kubectl get -n envoy-gateway-system "$n" -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{": "}{.resources}{"\n"}{end}'
+            # the bootstrap is passed on the envoy container's command line
+            kubectl get -n envoy-gateway-system "$n" -o json | python3 -c '
+          import json,sys,yaml
+          d=json.load(sys.stdin)
+          c=[c for c in d["spec"]["template"]["spec"]["containers"] if c["name"]=="envoy"][0]
+          args=c.get("args",[])+c.get("command",[])
+          boot=None
+          for i,a in enumerate(args):
+              if a.startswith("--config-yaml"):
+                  boot=a.split("=",1)[1] if "=" in a else args[i+1]
+          if boot is None: print("no --config-yaml arg; args:", [a[:40] for a in args]); sys.exit(0)
+          b=yaml.safe_load(boot)
+          o=b.get("overload_manager",{})
+          print("resource monitors:", [m["name"] for m in o.get("resource_monitors",[])])
+          for m in o.get("resource_monitors",[]):
+              if "fixed_heap" in m["name"]: print("  max_heap_size_bytes:", m["typed_config"].get("max_heap_size_bytes"))
+          print("overload actions:", [(x["name"], x["triggers"][0]["name"], x["triggers"][0].get("threshold",{}).get("value")) for x in o.get("actions",[])])
+          '
+          done
+      - name: Idle memory of each proxy container (crictl on the node)
+        run: |
+          docker exec chart-testing-control-plane crictl stats -o json 2>/dev/null | python3 -c '
+          import json,sys
+          d=json.load(sys.stdin)
+          for s in d["stats"]:
+              n=s["attributes"]["metadata"]["name"]; ls=s["attributes"].get("labels",{})
+              if n in ("envoy","shutdown-manager","envoy-gateway"):
+                  print(ls.get("io.kubernetes.pod.name"), n, int(s["memory"]["workingSetBytes"]["value"])//1048576, "MiB working set")
+          ' || docker exec chart-testing-control-plane crictl stats
